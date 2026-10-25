@@ -1,0 +1,36 @@
+# Visual Studio workspace files
+.vs/
+*.suo
+*.user
+*.VC.db
+*.VC.opendb
+
+# RayTracer generated build directories
+/RayTracer/Debug/
+/RayTracer/Release/
+/RayTracer/x64/
+/RayTracer/x86/
+/RayTracer/Bin/
+
+# Compiler and linker artifacts
+*.obj
+*.pdb
+*.ilk
+*.idb
+*.tlog
+*.lastbuildstate
+*.log
+*.exp
+
+# Temporary files
+*.tmp
+*.bak
+
+# Generated executable files
+/RayTracer/*.exe
+
+# Third-party generated documentation
+/external/glm/doc/
+
+# Third-party build caches
+/external/jpeg-9a-win32/.vs/
