@@ -1,6 +1,6 @@
 /* **************************
  * Raytracer
- * Name: Daniel Franco dofranco@usc.edu
+ * Name: Daniel Franco danielofranco84@gmail.com
  * *************************
 */
 
