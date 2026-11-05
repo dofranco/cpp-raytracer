@@ -110,6 +110,7 @@ struct Ray {
         tri_intersect = nullptr;
         sph_intersect = nullptr;
         intersect_point = { -1, -1, -1 };
+        t_val = 0.0;
     }
 
     //setter
@@ -298,11 +299,14 @@ void RayIntersectTriangle(const Triangle* in_triangle, Ray& curr_ray)
 
                 //if the t is in "front" of the ray and 
                 //if there is no current intersection or if this current t value is closer to the ray's origin
-                if (new_t_val > 0 && (curr_ray.t_val > new_t_val || curr_ray.tri_intersect == nullptr))
+                if (new_t_val > 0.0 &&
+                    (curr_ray.t_val == 0.0 || new_t_val < curr_ray.t_val))
                 {
                     if(DoesRayIntersectTriangle(this_triangle, curr_ray.ray_origin + new_t_val * curr_ray.ray_direction - arb))
                     {
                         curr_ray.tri_intersect = this_triangle;
+                        curr_ray.sph_intersect = nullptr;
+
                         curr_ray.t_val = new_t_val;
                         curr_ray.intersect_point = curr_ray.ray_origin + (curr_ray.t_val * curr_ray.ray_direction);
                     }
@@ -357,9 +361,12 @@ void RayIntersectSwphere(const Sphere* in_sphere, Ray& curr_ray)
                 else new_t_val = -100.0;
             }
 
-            if (new_t_val > 0 && (curr_ray.t_val > new_t_val || curr_ray.sph_intersect == nullptr))
+            if (new_t_val > 0.0 &&
+                (curr_ray.t_val == 0.0 || new_t_val < curr_ray.t_val))
             {
                 curr_ray.sph_intersect = this_sphere;
+                curr_ray.tri_intersect = nullptr;
+
                 curr_ray.t_val = new_t_val;
                 curr_ray.intersect_point = curr_ray.ray_origin + (curr_ray.t_val * curr_ray.ray_direction);
             }
