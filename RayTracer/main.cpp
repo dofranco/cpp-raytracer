@@ -54,31 +54,32 @@ int mode = MODE_DISPLAY;
 //the field of view of the camera
 #define fov 60.0
 
-glm::dvec3 zero_vector = { 0.0, 0.0, 0.0 };
+//glm::dvec3 zero_vector = { 0.0, 0.0, 0.0 };
+glm::dvec3 zero_vector{ 0.0 };
 
 struct Vertex
 {
-  double position[3];
-  double color_diffuse[3];
-  double color_specular[3];
-  double normal[3];
-  double shininess;
+    double position[3]{};
+    double color_diffuse[3]{};
+    double color_specular[3]{};
+    double normal[3]{};
+    double shininess = 0.0;
 };
+
 
 struct Triangle
 {
-  Vertex v[3];
-
-  glm::dvec3 tri_normal;
+    Vertex v[3]{};
+    glm::dvec3 tri_normal{ 0.0 };
 };
 
 struct Sphere
 {
-  double position[3];
-  double color_diffuse[3];
-  double color_specular[3];
-  double shininess;
-  double radius;
+  double position[3]{};
+  double color_diffuse[3]{};
+  double color_specular[3]{};
+  double shininess = 0.0;
+  double radius = 0.0;
 
   glm::dvec3 GetNormal(const glm::dvec3& intersect_point)
   {
@@ -88,8 +89,8 @@ struct Sphere
 
 struct Light
 {
-  double position[3];
-  double color[3];
+  double position[3]{};
+  double color[3]{};
 };
 
 struct Ray {
@@ -527,19 +528,18 @@ void draw_scene()
             //when no intersection occurs
             if (all_rays[i][j].sph_intersect == nullptr && all_rays[i][j].tri_intersect == nullptr) 
             {
-                plot_pixel(i, j, 1.0f * 255, 1.0f * 255, 1.0f * 255);
+                plot_pixel(i, j, 255, 255, 255);
             }
 
             //clamp to 0 or 255 before actually plotting the color
             else 
             {
                 glm::dvec3 fin_col;
-
                 fin_col.r = std::min(std::max(all_rays[i][j].ray_color.r + 255.0 * ambient_light[0], 0.0), 255.0);
                 fin_col.g = std::min(std::max(all_rays[i][j].ray_color.g + 255.0 * ambient_light[1], 0.0), 255.0);
                 fin_col.b = std::min(std::max(all_rays[i][j].ray_color.b + 255.0 * ambient_light[2], 0.0), 255.0);
 
-                plot_pixel(i, j, fin_col.r, fin_col.g, fin_col.b);
+                plot_pixel(i, j, static_cast<unsigned char>(fin_col.r), static_cast<unsigned char>(fin_col.g), static_cast<unsigned char>(fin_col.b));
             }
         }
     }
@@ -580,61 +580,170 @@ void save_jpg()
     printf("File saved Successfully\n");
 }
 
-void parse_check(const char *expected, char *found)
+//void parse_check(const char *expected, char *found)
+//{
+//  if(strcasecmp(expected,found))
+//  {
+//    printf("Expected '%s ' found '%s '\n", expected, found);
+//    printf("Parse error, abnormal abortion\n");
+//    exit(0);
+//  }
+//}
+//
+//void parse_doubles(FILE* file, const char *check, double p[3])
+//{
+//  char str[100];
+//
+//  if (fscanf(file, "%s", str) != 1)
+//  {
+//      fprintf(stderr, "Error: Expected one number.\n");
+//      exit(EXIT_FAILURE);
+//  }
+//
+//  parse_check(check,str);
+//
+//  if (fscanf(file, "%lf %lf %lf", &p[0], &p[1], &p[2]) != 3)
+//  {
+//      fprintf(stderr, "Error: Expected three numbers.\n");
+//      exit(EXIT_FAILURE);
+//  }
+//
+//  if (fscanf(file, "%s", str) != 1)
+//  {
+//      fprintf(stderr, "Error: Expected one number.\n");
+//      exit(EXIT_FAILURE);
+//  }
+//  
+//  printf("%s %lf %lf %lf\n",check,p[0],p[1],p[2]);
+//}
+//
+//void parse_rad(FILE *file, double *r)
+//{
+//  char str[100];
+//  fscanf(file,"%s",str);
+//  parse_check("rad:",str);
+//  fscanf(file,"%lf",r);
+//  printf("rad: %f\n",*r);
+//}
+//
+//void parse_shi(FILE *file, double *shi)
+//{
+//  char s[100];
+//  fscanf(file,"%s",s);
+//  parse_check("shi:",s);
+//  fscanf(file,"%lf",shi);
+//  printf("shi: %f\n",*shi);
+//}
+
+
+[[noreturn]] void scene_parse_error(const char* message)
 {
-  if(strcasecmp(expected,found))
-  {
-    printf("Expected '%s ' found '%s '\n", expected, found);
-    printf("Parse error, abnormal abortion\n");
-    exit(0);
-  }
+    fprintf(stderr, "Scene parsing error: %s\n", message);
+    exit(EXIT_FAILURE);
 }
 
-void parse_doubles(FILE* file, const char *check, double p[3])
+void parse_check(const char* expected, const char* found)
 {
-  char str[100];
-  fscanf(file,"%s",str);
-  parse_check(check,str);
-  fscanf(file,"%lf %lf %lf",&p[0],&p[1],&p[2]);
-  printf("%s %lf %lf %lf\n",check,p[0],p[1],p[2]);
+    if (strcasecmp(expected, found) != 0)
+    {
+        fprintf(stderr,
+            "Expected '%s', found '%s'\n",
+            expected, found);
+
+        scene_parse_error("Unexpected property label.");
+    }
 }
 
-void parse_rad(FILE *file, double *r)
+void parse_label(FILE* file, const char* expected)
 {
-  char str[100];
-  fscanf(file,"%s",str);
-  parse_check("rad:",str);
-  fscanf(file,"%lf",r);
-  printf("rad: %f\n",*r);
+    char label[100]{};
+
+    if (fscanf(file, " %99s", label) != 1)
+    {
+        scene_parse_error("Failed to read property label.");
+    }
+
+    parse_check(expected, label);
 }
 
-void parse_shi(FILE *file, double *shi)
+void parse_doubles(FILE* file, const char* check, double p[3])
 {
-  char s[100];
-  fscanf(file,"%s",s);
-  parse_check("shi:",s);
-  fscanf(file,"%lf",shi);
-  printf("shi: %f\n",*shi);
+    parse_label(file, check);
+
+    if (fscanf(file, "%lf %lf %lf",
+        &p[0], &p[1], &p[2]) != 3)
+    {
+        scene_parse_error("Expected three double values.");
+    }
+
+    printf("%s %lf %lf %lf\n",
+        check, p[0], p[1], p[2]);
 }
+
+void parse_rad(FILE* file, double* r)
+{
+    parse_label(file, "rad:");
+
+    if (fscanf(file, "%lf", r) != 1)
+    {
+        scene_parse_error("Invalid sphere radius.");
+    }
+
+    printf("rad: %f\n", *r);
+}
+
+void parse_shi(FILE* file, double* shi)
+{
+    parse_label(file, "shi:");
+
+    if (fscanf(file, "%lf", shi) != 1)
+    {
+        scene_parse_error("Invalid shininess value.");
+    }
+
+    printf("shi: %f\n", *shi);
+}
+
+
 
 int loadScene(char *argv)
 {
-  FILE * file = fopen(argv,"r");
-  int number_of_objects;
-  char type[50];
-  Triangle t;
-  Sphere s;
-  Light l;
-  fscanf(file,"%i", &number_of_objects);
+  FILE* file = fopen(argv, "r");
 
-  printf("number of objects: %i\n",number_of_objects);
+  if (file == nullptr)
+  {
+      perror(argv);
+      exit(EXIT_FAILURE);
+  }
 
-  parse_doubles(file,"amb:",ambient_light);
+  int number_of_objects = 0;
+  char type[50]{};
+
+  Triangle t{};
+  Sphere s{};
+  Light l{};
+
+  if (fscanf(file, "%d", &number_of_objects) != 1 ||
+      number_of_objects < 0)
+  {
+      scene_parse_error("Invalid number of scene objects.");
+  }
+
+  printf("number of objects: %d\n", number_of_objects);
+
+  parse_doubles(file, "amb:", ambient_light);
 
   for(int i=0; i<number_of_objects; i++)
   {
-    fscanf(file,"%s\n",type);
+
+    if (fscanf(file, " %49s", type) != 1)
+    {
+        scene_parse_error("Failed to read object type.");
+    }
+
+
     printf("%s\n",type);
+
     if(strcasecmp(type,"triangle")==0)
     {
       printf("found triangle\n");
@@ -700,6 +809,12 @@ int loadScene(char *argv)
       exit(0);
     }
   }
+
+  if (fclose(file) != 0)
+  {
+      scene_parse_error("Failed to close scene file.");
+  }
+
   return 0;
 }
 
