@@ -536,8 +536,8 @@ void draw_scene()
                 glm::dvec3 fin_col;
 
                 fin_col.r = std::min(std::max(all_rays[i][j].ray_color.r + 255.0 * ambient_light[0], 0.0), 255.0);
-                fin_col.g = std::min(std::max(all_rays[i][j].ray_color.g + 255.0 * ambient_light[0], 0.0), 255.0);
-                fin_col.b = std::min(std::max(all_rays[i][j].ray_color.b + 255.0 * ambient_light[0], 0.0), 255.0);
+                fin_col.g = std::min(std::max(all_rays[i][j].ray_color.g + 255.0 * ambient_light[1], 0.0), 255.0);
+                fin_col.b = std::min(std::max(all_rays[i][j].ray_color.b + 255.0 * ambient_light[2], 0.0), 255.0);
 
                 plot_pixel(i, j, fin_col.r, fin_col.g, fin_col.b);
             }
