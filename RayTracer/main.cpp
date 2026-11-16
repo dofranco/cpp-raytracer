@@ -333,7 +333,7 @@ void RayIntersectSwphere(const Sphere* in_sphere, Ray& curr_ray)
         if (this_sphere != in_sphere)
         {
             glm::dvec3 sphere_pos;
-            double new_t_val;
+            //double new_t_val;
 
             Arr2Vec(this_sphere->position, sphere_pos);
 
@@ -346,21 +346,43 @@ void RayIntersectSwphere(const Sphere* in_sphere, Ray& curr_ray)
                 pow((curr_ray.ray_origin.z - sphere_pos.z), 2) -
                 pow(this_sphere->radius, 2);
 
-            double b_plus = (-b_calc + sqrt(pow(b_calc, 2) - 4 * c_calc)) / 2.0;
-            double b_minus = (-b_calc - sqrt(pow(b_calc, 2) - 4 * c_calc)) / 2.0;
+            //double b_plus = (-b_calc + sqrt(pow(b_calc, 2) - 4 * c_calc)) / 2.0;
+            //double b_minus = (-b_calc - sqrt(pow(b_calc, 2) - 4 * c_calc)) / 2.0;
 
-            if (b_plus > b_minus)
+            //if (b_plus > b_minus)
+            //{
+            //    if (b_minus > 0) new_t_val = b_minus;
+            //    else if (b_plus > 0) new_t_val = b_plus;
+            //    else new_t_val = -100.0;
+            //}
+            //else
+            //{
+            //    if (b_plus > 0) new_t_val = b_plus;
+            //    else if (b_minus > 0) new_t_val = b_minus;
+            //    else new_t_val = -100.0;
+            //}
+
+
+            /*Correct handling of missed spheres: We skip intersections when the discriminant is negative.
+            - Simpler selection: Since t_near is always less than or equal to t_far, we don't need the original nested comparisons.
+            - Proper handling of rays starting inside spheres: If the near intersection is behind the ray origin, 
+                we use the farther intersection.*/
+            double discriminant = b_calc * b_calc - 4.0 * c_calc;
+
+            // A negative discriminant means the ray misses the sphere.
+            if (discriminant < 0.0)
             {
-                if (b_minus > 0) new_t_val = b_minus;
-                else if (b_plus > 0) new_t_val = b_plus;
-                else new_t_val = -100.0;
+                continue;
             }
-            else
-            {
-                if (b_plus > 0) new_t_val = b_plus;
-                else if (b_minus > 0) new_t_val = b_minus;
-                else new_t_val = -100.0;
-            }
+
+            // Calculate the two intersection distances.
+            double sqrt_discriminant = std::sqrt(discriminant);
+
+            double t_near = (-b_calc - sqrt_discriminant) / 2.0;
+            double t_far = (-b_calc + sqrt_discriminant) / 2.0;
+
+            // Select the nearest intersection in front of the ray.
+            double new_t_val = t_near > 0.0 ? t_near : t_far;
 
             if (new_t_val > 0.0 &&
                 (curr_ray.t_val == 0.0 || new_t_val < curr_ray.t_val))
