@@ -411,49 +411,43 @@ void GetShadowRay(Ray& curr_ray)
         // shadow ray will only be cast when intersection took place
         if (curr_ray.sph_intersect != nullptr || curr_ray.tri_intersect != nullptr) {
 
+            constexpr double SHADOW_EPSILON = 1e-4;
+
             glm::dvec3 light_pos;
-            glm::dvec3 light_reflect;
-
             Arr2Vec(curr_light->position, light_pos);
-            Arr2Vec(curr_light->position, light_reflect);
 
-            //get a vector from the point to the light
-            light_reflect = light_reflect - curr_ray.intersect_point;
+            // Calculate the vector from the surface to the light.
+            glm::dvec3 to_light = light_pos - curr_ray.intersect_point;
+            double light_distance = glm::length(to_light);
 
-            //normalize it
-            light_reflect = normalize(light_reflect);
-
-            //create a shadow ray starting from the point of intersection heading towards the light
-            Ray curr_shadow(curr_ray.intersect_point, light_reflect);
-
-            //calculate intersections of spheres and triangles
-            RayIntersectSwphere(curr_ray.sph_intersect, curr_shadow);
-            RayIntersectTriangle(curr_ray.tri_intersect, curr_shadow);
-
-            //if there is an intersection, ensure that it is withing bounds
-            if (curr_shadow.sph_intersect != nullptr || curr_shadow.tri_intersect != nullptr)
+            // Avoid normalizing a zero-length vector.
+            if (light_distance <= SHADOW_EPSILON)
             {
-                //calculate the vector bewteen the intersection point
-                glm::dvec3 dist_calc = curr_ray.intersect_point - curr_shadow.intersect_point;
-
-                double shadow_intct_pt = dot(dist_calc, dist_calc);
-
-                //calculate the vectore between the intersection and the light
-                dist_calc = light_pos - curr_ray.intersect_point;
-
-                double intct_pt_to_lght = dot(dist_calc, dist_calc);
-
-                //if the point that the shadow ray intersects with is further than the light, don't consider it blocked
-                if (intct_pt_to_lght < shadow_intct_pt)
-                {
-                    curr_shadow.tri_intersect = nullptr;
-                    curr_shadow.sph_intersect = nullptr;
-                }
+                continue;
             }
 
-            //else there is no interction and thus 
+            glm::dvec3 light_direction = to_light / light_distance;
+
+            // Move the shadow ray origin slightly toward the light.
+            glm::dvec3 shadow_origin =
+                curr_ray.intersect_point + light_direction * SHADOW_EPSILON;
+
+            Ray curr_shadow(shadow_origin, light_direction);
+
+            // Test all objects, including the original intersected object.
+            RayIntersectSwphere(nullptr, curr_shadow);
+            RayIntersectTriangle(nullptr, curr_shadow);
+
+            // An object only casts a shadow if it lies between
+            // the surface and the light source.
+            bool is_occluded =
+                (curr_shadow.sph_intersect != nullptr ||
+                    curr_shadow.tri_intersect != nullptr) &&
+                curr_shadow.t_val < light_distance - SHADOW_EPSILON;
+
+            //else there is no intersection and thus 
             // there must be phong lighting
-            if (curr_shadow.sph_intersect == nullptr && curr_shadow.tri_intersect == nullptr)
+            if (!is_occluded)
             {
                 glm::dvec3 k_dif, k_spec, norm, reflect, image_plane, light_color, light_vec(curr_shadow.ray_direction);
 
