@@ -30,6 +30,7 @@
 #include <cmath>
 #include <iostream>
 #include <vector>
+#include <cstdlib>
 
 //using namespace glm;
 
@@ -48,8 +49,12 @@ char * filename = NULL;
 int mode = MODE_DISPLAY;
 
 //you may want to make these smaller for debugging purposes
-#define WIDTH 640
-#define HEIGHT 480
+//#define render_width 640
+//#define render_height 480
+
+int render_width = 640;
+int render_height = 480;
+
 
 //the field of view of the camera
 #define fov 60.0
@@ -136,9 +141,11 @@ struct Ray {
 //ray data structure
 std::vector<std::vector<Ray>> all_rays;
 
-const float aspect_ratio = static_cast<float>(WIDTH) / HEIGHT;
+//const float aspect_ratio = static_cast<float>(render_width) / render_height;
 
-unsigned char buffer[HEIGHT][WIDTH][3];
+//unsigned char buffer[render_height][render_width][3];
+std::vector<unsigned char> buffer;
+
 
 void Arr2Vec(const double double_arr[], glm::dvec3& vec)
 {
@@ -199,12 +206,15 @@ void plot_pixel(int x,int y,unsigned char r,unsigned char g,unsigned char b);
 /// </summary>
 void InitRays()
 {
-    //initialize the rays
-    all_rays.resize(WIDTH);
+    const double aspect_ratio =
+        static_cast<double>(render_width) / render_height;
 
-    for (int i = 0; i < WIDTH; i++)
+    //initialize the rays
+    all_rays.resize(render_width);
+
+    for (int i = 0; i < render_width; i++)
     {
-        all_rays[i].resize(HEIGHT);
+        all_rays[i].resize(render_height);
     }
 
     double x_inc, y_inc, x_shift, y_shift;
@@ -217,15 +227,15 @@ void InitRays()
     double min_y_val = -tan_val;
 
     //set up increment values
-    x_inc = (max_x_val - min_x_val) / static_cast<float>(WIDTH);
-    y_inc = (max_y_val - min_y_val) / static_cast<float>(HEIGHT);
+    x_inc = (max_x_val - min_x_val) / static_cast<float>(render_width);
+    y_inc = (max_y_val - min_y_val) / static_cast<float>(render_height);
 
     x_shift = min_x_val;
     y_shift = min_y_val;
 
     // fill in all rays with appropriate direction vectors
-    for (uint32_t x = 0; x < WIDTH; ++x) {
-        for (uint32_t y = 0; y < HEIGHT; ++y) {
+    for (int x = 0; x < render_width; ++x) {
+        for (int y = 0; y < render_height; ++y) {
             all_rays[x][y].Set_Ray(zero_vector, glm::dvec3((x * x_inc) + min_x_val, (y * y_inc) + min_y_val, -1.0f));
             y_shift = y_shift + y_inc;
         }
@@ -531,9 +541,9 @@ void draw_scene()
     glPointSize(2.0);
     glBegin(GL_POINTS);
 
-    for (int i = 0; i < WIDTH; ++i)
+    for (int i = 0; i < render_width; ++i)
     {
-        for (int j = 0; j < HEIGHT; j++)
+        for (int j = 0; j < render_height; j++)
         {
             //get intersections for all rays and get the shadow rays as well.
             RayIntersectTriangle(nullptr, all_rays[i][j]);
@@ -571,11 +581,18 @@ void plot_pixel_display(int x, int y, unsigned char r, unsigned char g, unsigned
   glVertex2i(x,y);
 }
 
-void plot_pixel_jpeg(int x, int y, unsigned char r, unsigned char g, unsigned char b)
+void plot_pixel_jpeg(
+    int x, int y,
+    unsigned char r,
+    unsigned char g,
+    unsigned char b)
 {
-  buffer[y][x][0] = r;
-  buffer[y][x][1] = g;
-  buffer[y][x][2] = b;
+    const std::size_t index =
+        (static_cast<std::size_t>(y) * render_width + x) * 3;
+
+    buffer[index] = r;
+    buffer[index + 1] = g;
+    buffer[index + 2] = b;
 }
 
 void plot_pixel(int x, int y, unsigned char r, unsigned char g, unsigned char b)
@@ -589,7 +606,8 @@ void save_jpg()
 {
   printf("Saving JPEG file: %s\n", filename);
 
-  ImageIO img(WIDTH, HEIGHT, 3, &buffer[0][0][0]);
+  //ImageIO img(render_width, render_height, 3, &buffer[0][0][0]);
+  ImageIO img(render_width, render_height, 3, buffer.data());
   if (img.save(filename, ImageIO::FORMAT_JPEG) != ImageIO::OK)
     printf("Error in Saving\n");
   else 
@@ -841,7 +859,7 @@ void display()
 void init()
 {
   glMatrixMode(GL_PROJECTION);
-  glOrtho(0,WIDTH,0,HEIGHT,1,-1);
+  glOrtho(0,render_width,0,render_height,1,-1);
   glMatrixMode(GL_MODELVIEW);
   glLoadIdentity();
 
@@ -865,34 +883,90 @@ void idle()
   once=1;
 }
 
-int main(int argc, char ** argv)
+int ParseDimension(const char* text)
 {
-  if ((argc < 2) || (argc > 3))
-  {  
-    printf ("Usage: %s <input scenefile> [output jpegname]\n", argv[0]);
-    exit(0);
-  }
-  if(argc == 3)
-  {
-    mode = MODE_JPEG;
-    filename = argv[2];
-  }
-  else if(argc == 2)
-    mode = MODE_DISPLAY;
+    char* end = nullptr;
+    const long value = std::strtol(text, &end, 10);
 
-  glutInit(&argc,argv);
-  loadScene(argv[1]);
+    if (text == end || *end != '\0' ||
+        value <= 0 || value > 4096)
+    {
+        fprintf(stderr,
+            "Invalid dimension: %s (must be 1-4096)\n",
+            text);
+        exit(EXIT_FAILURE);
+    }
 
-  glutInitDisplayMode(GLUT_RGBA | GLUT_SINGLE);
-  glutInitWindowPosition(0,0);
-  glutInitWindowSize(WIDTH,HEIGHT);
-  int window = glutCreateWindow("Ray Tracer");
-  #ifdef __APPLE__
-    // This is needed on recent Mac OS X versions to correctly display the window.
-    glutReshapeWindow(WIDTH - 1, HEIGHT - 1);
-  #endif
-  glutDisplayFunc(display);
-  glutIdleFunc(idle);
-  init();
-  glutMainLoop();
+    return static_cast<int>(value);
+}
+
+int main(int argc, char** argv)
+{
+    if (argc != 2 && argc != 3 &&
+        argc != 4 && argc != 5)
+    {
+        fprintf(stderr,
+            "Usage: %s <scene> [output.jpg] [width height]\n",
+            argv[0]);
+        return EXIT_FAILURE;
+    }
+
+    // Optional JPEG output.
+    if (argc == 3 || argc == 5)
+    {
+        mode = MODE_JPEG;
+        filename = argv[2];
+    }
+
+    // Optional custom resolution.
+    if (argc == 4 || argc == 5)
+    {
+        const int first_dimension = (argc == 4) ? 2 : 3;
+
+        render_width = ParseDimension(argv[first_dimension]);
+        render_height = ParseDimension(argv[first_dimension + 1]);
+    }
+
+    // Keep memory usage within reasonable limits.
+    constexpr long long MAX_PIXELS = 4000000;
+
+    if (static_cast<long long>(render_width) *
+        render_height > MAX_PIXELS)
+    {
+        fprintf(stderr,
+            "Resolution exceeds the 4-million-pixel limit.\n");
+        return EXIT_FAILURE;
+    }
+
+    if (mode == MODE_JPEG)
+    {
+        buffer.resize(
+            static_cast<std::size_t>(render_width) *
+            render_height * 3
+        );
+    }
+
+    // Give GLUT only the executable argument.
+    int glut_argc = 1;
+    glutInit(&glut_argc, argv);
+
+    loadScene(argv[1]);
+
+    glutInitDisplayMode(GLUT_RGBA | GLUT_SINGLE);
+    glutInitWindowPosition(0, 0);
+    glutInitWindowSize(render_width, render_height);
+
+    glutCreateWindow("Ray Tracer");
+
+#ifdef __APPLE__
+    glutReshapeWindow(render_width - 1, render_height - 1);
+#endif
+
+    glutDisplayFunc(display);
+    glutIdleFunc(idle);
+
+    init();
+    glutMainLoop();
+
+    return EXIT_SUCCESS;
 }
