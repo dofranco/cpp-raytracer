@@ -32,6 +32,12 @@
 #include <vector>
 #include <cstdlib>
 
+
+#include <thread>
+#include <atomic>
+#include <chrono>
+#include <algorithm>
+
 //using namespace glm;
 
 #define MAX_TRIANGLES 20000
@@ -59,6 +65,15 @@ int render_height = 480;
 constexpr int SAMPLES_PER_AXIS = 2;
 constexpr int SAMPLES_PER_PIXEL =
 SAMPLES_PER_AXIS * SAMPLES_PER_AXIS;
+
+/*
+Value	Behavior
+0	    Automatically detect available CPU threads
+1	    Force single - threaded rendering
+2	    Use two rendering threads
+4	    Use four rendering threads
+*/
+unsigned int render_thread_count = 0;
 
 
 //the field of view of the camera
@@ -141,6 +156,14 @@ struct Ray {
     Sphere* sph_intersect;
 
     double t_val;
+};
+
+struct CameraSampling
+{
+    double min_x;
+    double min_y;
+    double x_step;
+    double y_step;
 };
 
 //ray data structure
@@ -540,28 +563,14 @@ void GetShadowRay(Ray& curr_ray)
     }
 }
 
-//MODIFY THIS FUNCTION
 
-void draw_scene()
+
+glm::dvec3 RenderPixel(
+    int x,
+    int y,
+    const CameraSampling& camera)
 {
-    glPointSize(1.0f);
-    glBegin(GL_POINTS);
-
-    const double pi = std::acos(-1.0);
-    const double tan_half_fov =
-        std::tan((fov / 2.0) * (pi / 180.0));
-
-    const double aspect_ratio =
-        static_cast<double>(render_width) / render_height;
-
-    const double min_x = -tan_half_fov * aspect_ratio;
-    const double min_y = -tan_half_fov;
-
-    const double x_step =
-        (2.0 * tan_half_fov * aspect_ratio) / render_width;
-
-    const double y_step =
-        (2.0 * tan_half_fov) / render_height;
+    glm::dvec3 accumulated_color(0.0);
 
     const glm::dvec3 ambient_color(
         255.0 * ambient_light[0],
@@ -569,74 +578,186 @@ void draw_scene()
         255.0 * ambient_light[2]
     );
 
-    for (int x = 0; x < render_width; ++x)
+    for (int sx = 0; sx < SAMPLES_PER_AXIS; ++sx)
     {
-        for (int y = 0; y < render_height; ++y)
+        for (int sy = 0; sy < SAMPLES_PER_AXIS; ++sy)
         {
-            glm::dvec3 accumulated_color(0.0);
+            const double offset_x =
+                (sx + 0.5) / SAMPLES_PER_AXIS;
 
-            // Sample multiple positions within each pixel.
-            for (int sx = 0; sx < SAMPLES_PER_AXIS; ++sx)
-            {
-                for (int sy = 0; sy < SAMPLES_PER_AXIS; ++sy)
-                {
-                    const double offset_x =
-                        (sx + 0.5) / SAMPLES_PER_AXIS;
+            const double offset_y =
+                (sy + 0.5) / SAMPLES_PER_AXIS;
 
-                    const double offset_y =
-                        (sy + 0.5) / SAMPLES_PER_AXIS;
+            const double sample_x =
+                camera.min_x +
+                (x + offset_x) * camera.x_step;
 
-                    const double sample_x =
-                        min_x + (x + offset_x) * x_step;
+            const double sample_y =
+                camera.min_y +
+                (y + offset_y) * camera.y_step;
 
-                    const double sample_y =
-                        min_y + (y + offset_y) * y_step;
-
-                    const glm::dvec3 direction(
-                        sample_x,
-                        sample_y,
-                        -1.0
-                    );
-
-                    Ray sample_ray(zero_vector, direction);
-
-                    // Find the nearest object.
-                    RayIntersectTriangle(nullptr, sample_ray);
-                    RayIntersectSwphere(nullptr, sample_ray);
-
-                    glm::dvec3 sample_color(255.0);
-
-                    if (sample_ray.tri_intersect != nullptr ||
-                        sample_ray.sph_intersect != nullptr)
-                    {
-                        // Calculate shadows and Phong lighting.
-                        GetShadowRay(sample_ray);
-
-                        sample_color =
-                            sample_ray.ray_color + ambient_color;
-                    }
-
-                    accumulated_color += sample_color;
-                }
-            }
-
-            // Average the samples before clamping.
-            glm::dvec3 final_color =
-                accumulated_color /
-                static_cast<double>(SAMPLES_PER_PIXEL);
-
-            final_color = glm::clamp(
-                final_color,
-                glm::dvec3(0.0),
-                glm::dvec3(255.0)
+            const glm::dvec3 direction(
+                sample_x, sample_y, -1.0
             );
 
-            plot_pixel(
-                x,
-                y,
-                static_cast<unsigned char>(final_color.r),
-                static_cast<unsigned char>(final_color.g),
-                static_cast<unsigned char>(final_color.b)
+            Ray sample_ray(zero_vector, direction);
+
+            RayIntersectTriangle(nullptr, sample_ray);
+            RayIntersectSwphere(nullptr, sample_ray);
+
+            glm::dvec3 sample_color(255.0);
+
+            if (sample_ray.tri_intersect != nullptr ||
+                sample_ray.sph_intersect != nullptr)
+            {
+                GetShadowRay(sample_ray);
+
+                sample_color =
+                    sample_ray.ray_color + ambient_color;
+            }
+
+            accumulated_color += sample_color;
+        }
+    }
+
+    glm::dvec3 final_color =
+        accumulated_color /
+        static_cast<double>(SAMPLES_PER_PIXEL);
+
+    return glm::clamp(
+        final_color,
+        glm::dvec3(0.0),
+        glm::dvec3(255.0)
+    );
+}
+
+
+//MODIFY THIS FUNCTION
+
+void draw_scene()
+{
+    const auto start_time =
+        std::chrono::steady_clock::now();
+
+    // Camera settings.
+    const double pi = std::acos(-1.0);
+
+    const double tan_half_fov =
+        std::tan((fov / 2.0) * (pi / 180.0));
+
+    const double aspect_ratio =
+        static_cast<double>(render_width) / render_height;
+
+    const CameraSampling camera{
+        -tan_half_fov * aspect_ratio,
+        -tan_half_fov,
+        (2.0 * tan_half_fov * aspect_ratio) / render_width,
+        (2.0 * tan_half_fov) / render_height
+    };
+
+    // Select the number of rendering threads.
+    unsigned int available_threads =
+        std::thread::hardware_concurrency();
+
+    if (available_threads == 0)
+    {
+        available_threads = 4;
+    }
+
+    const unsigned int requested_threads =
+        (render_thread_count == 0)
+        ? available_threads
+        : render_thread_count;
+
+    const unsigned int thread_count =
+        std::min(
+            requested_threads,
+            static_cast<unsigned int>(render_height)
+        );
+
+    // Workers dynamically claim the next unrendered row.
+    std::atomic<int> next_row{ 0 };
+
+    auto render_worker = [&]()
+        {
+            while (true)
+            {
+                const int y =
+                    next_row.fetch_add(
+                        1, std::memory_order_relaxed
+                    );
+
+                if (y >= render_height)
+                {
+                    break;
+                }
+
+                for (int x = 0; x < render_width; ++x)
+                {
+                    const glm::dvec3 color =
+                        RenderPixel(x, y, camera);
+
+                    const std::size_t index =
+                        (static_cast<std::size_t>(y) *
+                            render_width + x) * 3;
+
+                    buffer[index] =
+                        static_cast<unsigned char>(color.r);
+
+                    buffer[index + 1] =
+                        static_cast<unsigned char>(color.g);
+
+                    buffer[index + 2] =
+                        static_cast<unsigned char>(color.b);
+                }
+            }
+        };
+
+    // Launch worker threads.
+    std::vector<std::thread> workers;
+    workers.reserve(thread_count);
+
+    for (unsigned int i = 0; i < thread_count; ++i)
+    {
+        workers.emplace_back(render_worker);
+    }
+
+    // Wait for every worker to finish.
+    for (std::thread& worker : workers)
+    {
+        worker.join();
+    }
+
+    const auto end_time =
+        std::chrono::steady_clock::now();
+
+    const std::chrono::duration<double> elapsed =
+        end_time - start_time;
+
+    std::cout
+        << "Raytracing completed in "
+        << elapsed.count()
+        << " seconds using "
+        << thread_count
+        << " threads.\n";
+
+    // Display the finished image on the main thread.
+    glPointSize(1.0f);
+    glBegin(GL_POINTS);
+
+    for (int y = 0; y < render_height; ++y)
+    {
+        for (int x = 0; x < render_width; ++x)
+        {
+            const std::size_t index =
+                (static_cast<std::size_t>(y) *
+                    render_width + x) * 3;
+
+            plot_pixel_display(
+                x, y,
+                buffer[index],
+                buffer[index + 1],
+                buffer[index + 2]
             );
         }
     }
@@ -644,8 +765,7 @@ void draw_scene()
     glEnd();
     glFlush();
 
-    printf("Rendering complete!\n");
-    fflush(stdout);
+    std::cout << "Image displayed successfully.\n";
 }
 
 
@@ -1012,13 +1132,10 @@ int main(int argc, char** argv)
         return EXIT_FAILURE;
     }
 
-    if (mode == MODE_JPEG)
-    {
-        buffer.resize(
-            static_cast<std::size_t>(render_width) *
-            render_height * 3
-        );
-    }
+    buffer.resize(
+        static_cast<std::size_t>(render_width) *
+        render_height * 3
+    );
 
     // Give GLUT only the executable argument.
     int glut_argc = 1;
