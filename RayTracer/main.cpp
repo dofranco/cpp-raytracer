@@ -56,6 +56,11 @@ int render_width = 640;
 int render_height = 480;
 
 
+constexpr int SAMPLES_PER_AXIS = 2;
+constexpr int SAMPLES_PER_PIXEL =
+SAMPLES_PER_AXIS * SAMPLES_PER_AXIS;
+
+
 //the field of view of the camera
 #define fov 60.0
 
@@ -139,7 +144,7 @@ struct Ray {
 };
 
 //ray data structure
-std::vector<std::vector<Ray>> all_rays;
+//std::vector<std::vector<Ray>> all_rays;
 
 //const float aspect_ratio = static_cast<float>(render_width) / render_height;
 
@@ -210,11 +215,11 @@ void InitRays()
         static_cast<double>(render_width) / render_height;
 
     //initialize the rays
-    all_rays.resize(render_width);
+    //all_rays.resize(render_width);
 
     for (int i = 0; i < render_width; i++)
     {
-        all_rays[i].resize(render_height);
+        //all_rays[i].resize(render_height);
     }
 
     double x_inc, y_inc, x_shift, y_shift;
@@ -236,7 +241,7 @@ void InitRays()
     // fill in all rays with appropriate direction vectors
     for (int x = 0; x < render_width; ++x) {
         for (int y = 0; y < render_height; ++y) {
-            all_rays[x][y].Set_Ray(zero_vector, glm::dvec3((x * x_inc) + min_x_val, (y * y_inc) + min_y_val, -1.0f));
+            //all_rays[x][y].Set_Ray(zero_vector, glm::dvec3((x * x_inc) + min_x_val, (y * y_inc) + min_y_val, -1.0f));
             y_shift = y_shift + y_inc;
         }
         y_shift = min_y_val;
@@ -536,44 +541,113 @@ void GetShadowRay(Ray& curr_ray)
 }
 
 //MODIFY THIS FUNCTION
+
 void draw_scene()
 {
-    glPointSize(2.0);
+    glPointSize(1.0f);
     glBegin(GL_POINTS);
 
-    for (int i = 0; i < render_width; ++i)
+    const double pi = std::acos(-1.0);
+    const double tan_half_fov =
+        std::tan((fov / 2.0) * (pi / 180.0));
+
+    const double aspect_ratio =
+        static_cast<double>(render_width) / render_height;
+
+    const double min_x = -tan_half_fov * aspect_ratio;
+    const double min_y = -tan_half_fov;
+
+    const double x_step =
+        (2.0 * tan_half_fov * aspect_ratio) / render_width;
+
+    const double y_step =
+        (2.0 * tan_half_fov) / render_height;
+
+    const glm::dvec3 ambient_color(
+        255.0 * ambient_light[0],
+        255.0 * ambient_light[1],
+        255.0 * ambient_light[2]
+    );
+
+    for (int x = 0; x < render_width; ++x)
     {
-        for (int j = 0; j < render_height; j++)
+        for (int y = 0; y < render_height; ++y)
         {
-            //get intersections for all rays and get the shadow rays as well.
-            RayIntersectTriangle(nullptr, all_rays[i][j]);
-            RayIntersectSwphere(nullptr, all_rays[i][j]);
-            GetShadowRay(all_rays[i][j]);
+            glm::dvec3 accumulated_color(0.0);
 
-            //change the value of the floats in each of the color channels to change the color of the background
-            //when no intersection occurs
-            if (all_rays[i][j].sph_intersect == nullptr && all_rays[i][j].tri_intersect == nullptr) 
+            // Sample multiple positions within each pixel.
+            for (int sx = 0; sx < SAMPLES_PER_AXIS; ++sx)
             {
-                plot_pixel(i, j, 255, 255, 255);
+                for (int sy = 0; sy < SAMPLES_PER_AXIS; ++sy)
+                {
+                    const double offset_x =
+                        (sx + 0.5) / SAMPLES_PER_AXIS;
+
+                    const double offset_y =
+                        (sy + 0.5) / SAMPLES_PER_AXIS;
+
+                    const double sample_x =
+                        min_x + (x + offset_x) * x_step;
+
+                    const double sample_y =
+                        min_y + (y + offset_y) * y_step;
+
+                    const glm::dvec3 direction(
+                        sample_x,
+                        sample_y,
+                        -1.0
+                    );
+
+                    Ray sample_ray(zero_vector, direction);
+
+                    // Find the nearest object.
+                    RayIntersectTriangle(nullptr, sample_ray);
+                    RayIntersectSwphere(nullptr, sample_ray);
+
+                    glm::dvec3 sample_color(255.0);
+
+                    if (sample_ray.tri_intersect != nullptr ||
+                        sample_ray.sph_intersect != nullptr)
+                    {
+                        // Calculate shadows and Phong lighting.
+                        GetShadowRay(sample_ray);
+
+                        sample_color =
+                            sample_ray.ray_color + ambient_color;
+                    }
+
+                    accumulated_color += sample_color;
+                }
             }
 
-            //clamp to 0 or 255 before actually plotting the color
-            else 
-            {
-                glm::dvec3 fin_col;
-                fin_col.r = std::min(std::max(all_rays[i][j].ray_color.r + 255.0 * ambient_light[0], 0.0), 255.0);
-                fin_col.g = std::min(std::max(all_rays[i][j].ray_color.g + 255.0 * ambient_light[1], 0.0), 255.0);
-                fin_col.b = std::min(std::max(all_rays[i][j].ray_color.b + 255.0 * ambient_light[2], 0.0), 255.0);
+            // Average the samples before clamping.
+            glm::dvec3 final_color =
+                accumulated_color /
+                static_cast<double>(SAMPLES_PER_PIXEL);
 
-                plot_pixel(i, j, static_cast<unsigned char>(fin_col.r), static_cast<unsigned char>(fin_col.g), static_cast<unsigned char>(fin_col.b));
-            }
+            final_color = glm::clamp(
+                final_color,
+                glm::dvec3(0.0),
+                glm::dvec3(255.0)
+            );
+
+            plot_pixel(
+                x,
+                y,
+                static_cast<unsigned char>(final_color.r),
+                static_cast<unsigned char>(final_color.g),
+                static_cast<unsigned char>(final_color.b)
+            );
         }
     }
+
     glEnd();
     glFlush();
 
-    printf("Done!\n"); fflush(stdout);
+    printf("Rendering complete!\n");
+    fflush(stdout);
 }
+
 
 void plot_pixel_display(int x, int y, unsigned char r, unsigned char g, unsigned char b)
 {
@@ -866,7 +940,7 @@ void init()
   glClearColor(0,0,0,0);
   glClear(GL_COLOR_BUFFER_BIT);
 
-  InitRays();
+  //InitRays();
 
 }
 
