@@ -32,11 +32,14 @@
 #include <vector>
 #include <cstdlib>
 
-
 #include <thread>
 #include <atomic>
 #include <chrono>
 #include <algorithm>
+
+#include <limits>
+#include <numeric>
+#include <array>
 
 //using namespace glm;
 
@@ -54,6 +57,7 @@ char * filename = NULL;
 
 int mode = MODE_DISPLAY;
 
+
 //you may want to make these smaller for debugging purposes
 //#define render_width 640
 //#define render_height 480
@@ -61,10 +65,15 @@ int mode = MODE_DISPLAY;
 int render_width = 640;
 int render_height = 480;
 
-
 constexpr int SAMPLES_PER_AXIS = 2;
 constexpr int SAMPLES_PER_PIXEL =
 SAMPLES_PER_AXIS * SAMPLES_PER_AXIS;
+
+constexpr int BVH_LEAF_SIZE = 4;
+constexpr double BVH_EPSILON = 1e-6;
+
+// Toggle for benchmarking.
+bool use_bvh = true;
 
 /*
 Value	Behavior
@@ -158,6 +167,24 @@ struct Ray {
     double t_val;
 };
 
+Triangle triangles[MAX_TRIANGLES];
+Sphere spheres[MAX_SPHERES];
+Light lights[MAX_LIGHTS];
+double ambient_light[3];
+
+int num_triangles = 0;
+int num_spheres = 0;
+int num_lights = 0;
+
+void plot_pixel_display(int x, int y, unsigned char r, unsigned char g, unsigned char b);
+void plot_pixel_jpeg(int x, int y, unsigned char r, unsigned char g, unsigned char b);
+void plot_pixel(int x, int y, unsigned char r, unsigned char g, unsigned char b);
+
+void Arr2Vec(const double double_arr[], glm::dvec3& vec);
+bool DoesRayIntersectTriangle(const Triangle* tri_check, glm::dvec3 point_to_check);
+void RayIntersectTriangle(const Triangle* in_triangle, Ray& curr_ray);
+void RayIntersectSwphere(const Sphere* in_sphere, Ray& curr_ray);
+
 struct CameraSampling
 {
     double min_x;
@@ -165,6 +192,385 @@ struct CameraSampling
     double x_step;
     double y_step;
 };
+
+struct Bounds3
+{
+    glm::dvec3 min{
+        std::numeric_limits<double>::infinity()
+    };
+    glm::dvec3 max{
+        -std::numeric_limits<double>::infinity()
+    };
+};
+
+struct BVHPrimitive
+{
+    bool is_sphere = false;
+    int index = 0;
+    Bounds3 bounds;
+    glm::dvec3 centroid{ 0.0 };
+};
+
+struct BVHNode
+{
+    Bounds3 bounds;
+    int left = -1;
+    int right = -1;
+
+    int start = 0;
+    int count = 0;
+};
+
+std::vector<BVHPrimitive> bvh_primitives;
+std::vector<BVHNode> bvh_nodes;
+
+void ExpandBounds(Bounds3& target, const Bounds3& other)
+{
+    target.min = glm::min(target.min, other.min);
+    target.max = glm::max(target.max, other.max);
+}
+
+void ExpandBounds(Bounds3& target, const glm::dvec3& point)
+{
+    target.min = glm::min(target.min, point);
+    target.max = glm::max(target.max, point);
+}
+
+int BuildBVHNode(int start, int end)
+{
+    const int node_index =
+        static_cast<int>(bvh_nodes.size());
+
+    bvh_nodes.emplace_back();
+
+    Bounds3 bounds;
+    Bounds3 centroid_bounds;
+
+    for (int i = start; i < end; ++i)
+    {
+        ExpandBounds(bounds, bvh_primitives[i].bounds);
+        ExpandBounds(
+            centroid_bounds,
+            bvh_primitives[i].centroid
+        );
+    }
+
+    bvh_nodes[node_index].bounds = bounds;
+
+    const int count = end - start;
+    const glm::dvec3 extent =
+        centroid_bounds.max - centroid_bounds.min;
+
+    int axis = 0;
+
+    if (extent.y > extent.x)
+        axis = 1;
+
+    if (extent.z > extent[axis])
+        axis = 2;
+
+    // Stop splitting at small leaves or when
+    // all centroids coincide.
+    if (count <= BVH_LEAF_SIZE ||
+        extent[axis] <= 1e-12)
+    {
+        bvh_nodes[node_index].start = start;
+        bvh_nodes[node_index].count = count;
+        return node_index;
+    }
+
+    const int middle = start + count / 2;
+
+    std::nth_element(
+        bvh_primitives.begin() + start,
+        bvh_primitives.begin() + middle,
+        bvh_primitives.begin() + end,
+        [axis](const BVHPrimitive& a,
+            const BVHPrimitive& b)
+        {
+            return a.centroid[axis] < b.centroid[axis];
+        }
+    );
+
+    const int left = BuildBVHNode(start, middle);
+    const int right = BuildBVHNode(middle, end);
+
+    // Use the index rather than retaining a
+    // reference that vector reallocation could invalidate.
+    bvh_nodes[node_index].left = left;
+    bvh_nodes[node_index].right = right;
+
+    return node_index;
+}
+
+void BuildBVH()
+{
+    bvh_primitives.clear();
+    bvh_nodes.clear();
+
+    bvh_primitives.reserve(
+        static_cast<std::size_t>(num_triangles) +
+        num_spheres
+    );
+
+    // Add spheres.
+    for (int i = 0; i < num_spheres; ++i)
+    {
+        glm::dvec3 center;
+        Arr2Vec(spheres[i].position, center);
+
+        const glm::dvec3 radius(spheres[i].radius);
+
+        BVHPrimitive primitive;
+        primitive.is_sphere = true;
+        primitive.index = i;
+        primitive.bounds.min = center - radius;
+        primitive.bounds.max = center + radius;
+        primitive.centroid = center;
+
+        bvh_primitives.push_back(primitive);
+    }
+
+    // Add triangles.
+    for (int i = 0; i < num_triangles; ++i)
+    {
+        glm::dvec3 a, b, c;
+
+        Arr2Vec(triangles[i].v[0].position, a);
+        Arr2Vec(triangles[i].v[1].position, b);
+        Arr2Vec(triangles[i].v[2].position, c);
+
+        BVHPrimitive primitive;
+        primitive.is_sphere = false;
+        primitive.index = i;
+
+        primitive.bounds.min =
+            glm::min(a, glm::min(b, c));
+
+        primitive.bounds.max =
+            glm::max(a, glm::max(b, c));
+
+        primitive.centroid = (a + b + c) / 3.0;
+
+        bvh_primitives.push_back(primitive);
+    }
+
+    if (!bvh_primitives.empty())
+    {
+        BuildBVHNode(
+            0,
+            static_cast<int>(bvh_primitives.size())
+        );
+    }
+
+    std::cout << "BVH built with "
+        << bvh_primitives.size()
+        << " primitives and "
+        << bvh_nodes.size()
+        << " nodes.\n";
+}
+
+
+bool IntersectBounds(
+    const Bounds3& bounds,
+    const Ray& ray,
+    double max_distance)
+{
+    double t_min = BVH_EPSILON;
+    double t_max = max_distance;
+
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        const double origin = ray.ray_origin[axis];
+        const double direction = ray.ray_direction[axis];
+
+        if (std::abs(direction) < 1e-12)
+        {
+            if (origin < bounds.min[axis] ||
+                origin > bounds.max[axis])
+            {
+                return false;
+            }
+
+            continue;
+        }
+
+        double t1 =
+            (bounds.min[axis] - origin) / direction;
+
+        double t2 =
+            (bounds.max[axis] - origin) / direction;
+
+        if (t1 > t2)
+            std::swap(t1, t2);
+
+        t_min = std::max(t_min, t1);
+        t_max = std::min(t_max, t2);
+
+        if (t_min > t_max)
+            return false;
+    }
+
+    return true;
+}
+
+
+void IntersectBVHPrimitive(
+    const BVHPrimitive& primitive,
+    Ray& ray)
+{
+    if (primitive.is_sphere)
+    {
+        Sphere* sphere = &spheres[primitive.index];
+
+        glm::dvec3 center;
+        Arr2Vec(sphere->position, center);
+
+        const glm::dvec3 oc = ray.ray_origin - center;
+
+        // Ray directions are normalized.
+        const double half_b =
+            glm::dot(oc, ray.ray_direction);
+
+        const double c =
+            glm::dot(oc, oc) -
+            sphere->radius * sphere->radius;
+
+        const double discriminant =
+            half_b * half_b - c;
+
+        if (discriminant < 0.0)
+            return;
+
+        const double root = std::sqrt(discriminant);
+
+        double t = -half_b - root;
+
+        if (t <= BVH_EPSILON)
+            t = -half_b + root;
+
+        if (t <= BVH_EPSILON)
+            return;
+
+        if (ray.t_val > 0.0 && t >= ray.t_val)
+            return;
+
+        ray.t_val = t;
+        ray.sph_intersect = sphere;
+        ray.tri_intersect = nullptr;
+    }
+    else
+    {
+        Triangle* triangle =
+            &triangles[primitive.index];
+
+        glm::dvec3 a;
+        Arr2Vec(triangle->v[0].position, a);
+
+        const double denominator =
+            glm::dot(
+                triangle->tri_normal,
+                ray.ray_direction
+            );
+
+        if (std::abs(denominator) <= 1e-12)
+            return;
+
+        const double t =
+            glm::dot(
+                triangle->tri_normal,
+                a - ray.ray_origin
+            ) / denominator;
+
+        if (t <= BVH_EPSILON)
+            return;
+
+        if (ray.t_val > 0.0 && t >= ray.t_val)
+            return;
+
+        const glm::dvec3 point =
+            ray.ray_origin + t * ray.ray_direction;
+
+        if (!DoesRayIntersectTriangle(
+            triangle, point - a))
+        {
+            return;
+        }
+
+        ray.t_val = t;
+        ray.tri_intersect = triangle;
+        ray.sph_intersect = nullptr;
+    }
+
+    ray.intersect_point =
+        ray.ray_origin +
+        ray.t_val * ray.ray_direction;
+}
+
+void IntersectBVH(Ray& ray)
+{
+    if (bvh_nodes.empty())
+        return;
+
+    // Median splitting keeps this tree shallow
+    // for our current scene limits.
+    std::array<int, 64> stack{};
+    int stack_size = 0;
+
+    stack[stack_size++] = 0;
+
+    while (stack_size > 0)
+    {
+        const int node_index = stack[--stack_size];
+        const BVHNode& node = bvh_nodes[node_index];
+
+        const double max_distance =
+            ray.t_val > 0.0
+            ? ray.t_val
+            : std::numeric_limits<double>::infinity();
+
+        if (!IntersectBounds(
+            node.bounds, ray, max_distance))
+        {
+            continue;
+        }
+
+        // Leaf: test its actual primitives.
+        if (node.left == -1 && node.right == -1)
+        {
+            for (int i = 0; i < node.count; ++i)
+            {
+                IntersectBVHPrimitive(
+                    bvh_primitives[node.start + i],
+                    ray
+                );
+            }
+        }
+        else
+        {
+            // Process children using the same stack.
+            if (node.left != -1)
+                stack[stack_size++] = node.left;
+
+            if (node.right != -1)
+                stack[stack_size++] = node.right;
+        }
+    }
+}
+
+void IntersectScene(Ray& ray)
+{
+    if (use_bvh)
+    {
+        IntersectBVH(ray);
+    }
+    else
+    {
+        RayIntersectTriangle(nullptr, ray);
+        RayIntersectSwphere(nullptr, ray);
+    }
+}
+
 
 //ray data structure
 //std::vector<std::vector<Ray>> all_rays;
@@ -215,18 +621,6 @@ bool DoesRayIntersectTriangle(const Triangle* tri_check, glm::dvec3 point_to_che
     return ((a_val + b_val < 1.0) && (a_val >= 0) && (b_val >= 0));
 }
 
-Triangle triangles[MAX_TRIANGLES];
-Sphere spheres[MAX_SPHERES];
-Light lights[MAX_LIGHTS];
-double ambient_light[3];
-
-int num_triangles = 0;
-int num_spheres = 0;
-int num_lights = 0;
-
-void plot_pixel_display(int x,int y,unsigned char r,unsigned char g,unsigned char b);
-void plot_pixel_jpeg(int x,int y,unsigned char r,unsigned char g,unsigned char b);
-void plot_pixel(int x,int y,unsigned char r,unsigned char g,unsigned char b);
 
 
 /// <summary>
@@ -435,6 +829,7 @@ void RayIntersectSwphere(const Sphere* in_sphere, Ray& curr_ray)
     }
 }
 
+
 /// <summary>
 /// Iterate through all light sources, firing shadow rays from points of intersection on
 /// the ray
@@ -473,8 +868,9 @@ void GetShadowRay(Ray& curr_ray)
             Ray curr_shadow(shadow_origin, light_direction);
 
             // Test all objects, including the original intersected object.
-            RayIntersectSwphere(nullptr, curr_shadow);
-            RayIntersectTriangle(nullptr, curr_shadow);
+            //RayIntersectSwphere(nullptr, curr_shadow);
+            //RayIntersectTriangle(nullptr, curr_shadow);
+            IntersectScene(curr_shadow);
 
             // An object only casts a shadow if it lies between
             // the surface and the light source.
@@ -602,8 +998,10 @@ glm::dvec3 RenderPixel(
 
             Ray sample_ray(zero_vector, direction);
 
-            RayIntersectTriangle(nullptr, sample_ray);
-            RayIntersectSwphere(nullptr, sample_ray);
+            //RayIntersectTriangle(nullptr, sample_ray);
+            //RayIntersectSwphere(nullptr, sample_ray);
+
+            IntersectScene(sample_ray);
 
             glm::dvec3 sample_color(255.0);
 
@@ -1142,6 +1540,8 @@ int main(int argc, char** argv)
     glutInit(&glut_argc, argv);
 
     loadScene(argv[1]);
+
+    BuildBVH();
 
     glutInitDisplayMode(GLUT_RGBA | GLUT_SINGLE);
     glutInitWindowPosition(0, 0);
